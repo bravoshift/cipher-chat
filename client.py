@@ -26,7 +26,7 @@ class CipherClient:
         self.session_key = None
         self.ready = asyncio.Event()
 
-    def public_key_packet(self):
+    def public_key_packet(self, reply=False):
         public_pem = self.private_key.public_key().public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -34,6 +34,7 @@ class CipherClient:
 
         return json.dumps({
             "type": "public_key",
+            "reply": reply,
             "from": self.client_id,
             "key": base64.b64encode(public_pem).decode(),
         })
@@ -68,6 +69,8 @@ class CipherClient:
         )
 
         print("\n[+] Peer public key received.")
+        if not packet.get("reply"):
+            await websocket.send(self.public_key_packet(reply=True))
 
         if self.client_id < self.peer_id and self.session_key is None:
             self.session_key = AESGCM.generate_key(bit_length=256)
