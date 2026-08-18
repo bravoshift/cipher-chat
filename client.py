@@ -94,5 +94,86 @@ class CipherClient:
             self.ready.set()
             print("[+] AES-256 session established.")
 
+
     def handle_session_key(self, packet):
-        if
+        if packet.get("to") != self.client_id:
+            return
+
+        encrypted_key = base64.b64decode(packet["key"])
+
+        self.session_key = self.private_key.decrypt(
+            encrypted_key,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+
+        self.ready.set()
+        print("\n[+] AES-256 session established.")
+
+    def handle_message(self, packet):
+        if not self.session_key:
+            return
+
+        nonce = base64.b64decode(packet["nonce"])
+        ciphertext = base64.b64decode(packet["ciphertext"])
+
+        plaintext = AESGCM(self.session_key).decrypt(
+            nonce,
+            ciphertext,
+            AAD,
+        )
+
+        print(f"\nPeer: {plaintext.decode()}")
+        print("You: ", end="", flush=True)
+
+    async def send_messages(self, websocket):
+        print("[*] Waiting for a second user...")
+        await self.ready.wait()
+        print("[*] Secure chat ready. Type /quit to exit.")
+
+        while True:
+            message = await asyncio.to_thread(input, "You: ")
+
+            if message.strip().lower() == "/quit":
+                await websocket.close()
+                return
+
+            nonce = secrets.token_bytes(12)
+            ciphertext = AESGCM(self.session_key).encrypt(
+                nonce,
+                message.encode(),
+                AAD,
+            )
+
+            await websocket.send(json.dumps({
+                "type": "message",
+                "from": self.client_id,
+                "nonce": base64.b64encode(nonce).decode(),
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+            }))
+
+    async def run(self):
+        async with websockets.connect(SERVER) as websocket:
+            print(f"[*] Connected as {self.client_id}")
+            await websocket.send(self.public_key_packet())
+
+            receiver = asyncio.create_task(self.receive(websocket))
+            sender = asyncio.create_task(self.send_messages(websocket))
+
+            done, pending = await asyncio.wait(
+                {receiver, sender},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(CipherClient().run())
+    except KeyboardInterrupt:
+        print("\nDisconnected.")
